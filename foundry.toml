@@ -1,6 +1,13 @@
 [profile.default]
 src = "src"
 out = "out"
+ffi = true
+ast = true
+optimizer = true
+optimizer_runs = 800
+via_ir = false
+build_info = true
 libs = ["lib"]
+extra_output = ["storageLayout"]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

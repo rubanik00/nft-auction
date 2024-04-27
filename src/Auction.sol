@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
-// import "./utils/IAuction.sol";
+import {AuctionErrorLib} from "./utils/AuctionErrorLib.sol";
 import "./utils/Payout2981Support.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
@@ -80,36 +80,10 @@ contract Auction is
     event PayoutPendingPayments(uint256 auctionId, address from, address to);
     event NewFee(uint256 newFee);
 
-    error NotOwner(address caller);
-    error NotWhitelistedPaymentToken();
-    error ToLowDelta();
-    error AmountEquelZero();
-    error StartTimeEqualZero();
-    error WrongAuctionEndingDate();
-    error NotApprovedToken();
-    error NotSupportedToken();
-    error AuctionDoesNotExist();
-    error OwnerCannotAddBid();
-    error CannotAddBidAgain();
-    error AuctionIsAlreadyFinished();
-    error AmountMoreThanFixedPrice();
-    error WrongMsgValue();
-    error ShouldBeBiggerThanPrevious();
-    error ShouldBeBiggerThanStartPrice();
-    error AlreadyExtended();
-    error CouldExtendOnlyFor30Days();
-    error FirstBidAlreadyPlaced();
-    error AuctionIsAlreadyStarted();
-    error NotLastBidder();
-    error RoyaltyValueMustBeEqualTo(uint256 royaltyAmount);
-    error GraterThanMaxFee(uint256 maxFee);
-    error FaliedToSendEther();
-    error NativeAddress();
-
     /// @dev Check if caller is contract owner
     modifier onlyOwner() {
         if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
-            revert NotOwner(msg.sender);
+            revert AuctionErrorLib.NotOwner(msg.sender);
         }
         _;
     }
@@ -174,17 +148,17 @@ contract Auction is
         uint32 endTime,
         uint256 delta
     ) external returns (uint256 id) {
-        if (!whitelistedPaymentTokens[paymentToken] || paymentToken != address(0)) revert NotWhitelistedPaymentToken();
-        if (delta < minDelta) revert ToLowDelta();
-        if (amount == 0) revert AmountEquelZero();
-        if (startTime == 0) revert StartTimeEqualZero();
-        if (endTime <= startTime) revert WrongAuctionEndingDate();
+        if (!whitelistedPaymentTokens[paymentToken] || paymentToken != address(0)) revert AuctionErrorLib.NotWhitelistedPaymentToken();
+        if (delta < minDelta) revert AuctionErrorLib.ToLowDelta();
+        if (amount == 0) revert AuctionErrorLib.AmountEquelZero();
+        if (startTime == 0) revert AuctionErrorLib.StartTimeEqualZero();
+        if (endTime <= startTime) revert AuctionErrorLib.WrongAuctionEndingDate();
 
         if (IERC165(tokenContract).supportsInterface(type(IERC721).interfaceId)) {
-            if (!IERC721(tokenContract).isApprovedForAll(msg.sender, address(this))) revert NotApprovedToken();
+            if (!IERC721(tokenContract).isApprovedForAll(msg.sender, address(this))) revert AuctionErrorLib.NotApprovedToken();
         } else {
-            if (!IERC165(tokenContract).supportsInterface(type(IERC1155).interfaceId)) revert NotSupportedToken();
-            if (!IERC1155(tokenContract).isApprovedForAll(msg.sender, address(this))) revert NotApprovedToken();
+            if (!IERC165(tokenContract).supportsInterface(type(IERC1155).interfaceId)) revert AuctionErrorLib.NotSupportedToken();
+            if (!IERC1155(tokenContract).isApprovedForAll(msg.sender, address(this))) revert AuctionErrorLib.NotApprovedToken();
         }
 
         id = lastId;
@@ -232,16 +206,16 @@ contract Auction is
     function addBid(uint256 auctionId, uint256 amount) external payable nonReentrant {
         AuctionLot memory auction = getAuctionInfo(auctionId);
 
-        if (auction.auctionCreator == address(0)) revert AuctionDoesNotExist();
-        if (auction.auctionCreator == msg.sender) revert OwnerCannotAddBid();
-        if (auction.lastBidder == msg.sender) revert CannotAddBidAgain();
+        if (auction.auctionCreator == address(0)) revert AuctionErrorLib.AuctionDoesNotExist();
+        if (auction.auctionCreator == msg.sender) revert AuctionErrorLib.OwnerCannotAddBid();
+        if (auction.lastBidder == msg.sender) revert AuctionErrorLib.CannotAddBidAgain();
         if (uint32(block.timestamp) > auction.endTime || auction.lastBid == auction.buyNowPrice) {
-            revert AuctionIsAlreadyFinished();
+            revert AuctionErrorLib.AuctionIsAlreadyFinished();
         }
-        if (amount > auction.buyNowPrice) revert AmountMoreThanFixedPrice();
+        if (amount > auction.buyNowPrice) revert AuctionErrorLib.AmountMoreThanFixedPrice();
 
         if (auction.paymentToken == address(0)) {
-            if (msg.value != amount) revert WrongMsgValue();
+            if (msg.value != amount) revert AuctionErrorLib.WrongMsgValue();
         } else {
             uint256 balanceBefore = IERC20(auction.paymentToken).balanceOf(address(this));
             IERC20(auction.paymentToken).safeTransferFrom(msg.sender, address(this), amount);
@@ -250,11 +224,11 @@ contract Auction is
         }
 
         if (auction.lastBidder != address(0)) {
-            if (amount <= auction.lastBid + auction.delta) revert ShouldBeBiggerThanPrevious();
+            if (amount <= auction.lastBid + auction.delta) revert AuctionErrorLib.ShouldBeBiggerThanPrevious();
 
             _payout(auctionId, auction.paymentToken, auction.lastBidder, auction.lastBid);
         } else {
-            if (amount <= auction.startPrice) revert ShouldBeBiggerThanStartPrice();
+            if (amount <= auction.startPrice) revert AuctionErrorLib.ShouldBeBiggerThanStartPrice();
         }
 
         _auctionLots[auctionId].lastBidder = msg.sender;
@@ -268,12 +242,12 @@ contract Auction is
     /// @param newEndTime new timestamp for ending, could be no longer than 30 days than previous endTime
     function extendActionLifeTime(uint256 auctionId, uint32 newEndTime) public {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        if (msg.sender != auction.auctionCreator) revert NotOwner(msg.sender);
-        if (_extendedLots[auctionId]) revert AlreadyExtended();
+        if (msg.sender != auction.auctionCreator) revert AuctionErrorLib.NotOwner(msg.sender);
+        if (_extendedLots[auctionId]) revert AuctionErrorLib.AlreadyExtended();
         if (uint32(block.timestamp) > auction.endTime || auction.lastBid == auction.buyNowPrice) {
-            revert AuctionIsAlreadyFinished();
+            revert AuctionErrorLib.AuctionIsAlreadyFinished();
         }
-        if (newEndTime - _auctionLots[auctionId].endTime > 30 days) revert CouldExtendOnlyFor30Days();
+        if (newEndTime - _auctionLots[auctionId].endTime > 30 days) revert AuctionErrorLib.CouldExtendOnlyFor30Days();
 
         _auctionLots[auctionId].endTime = newEndTime;
         _extendedLots[auctionId] = true;
@@ -299,18 +273,18 @@ contract Auction is
         uint256 delta
     ) external {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        if (msg.sender != auction.auctionCreator) revert NotOwner(msg.sender);
+        if (msg.sender != auction.auctionCreator) revert AuctionErrorLib.NotOwner(msg.sender);
         if (uint32(block.timestamp) > auction.endTime || auction.lastBid != auction.buyNowPrice) {
-            revert AuctionIsAlreadyFinished();
+            revert AuctionErrorLib.AuctionIsAlreadyFinished();
         }
 
         if (auction.startPrice != startPrice) {
-            if (auction.lastBid != 0) revert FirstBidAlreadyPlaced();
+            if (auction.lastBid != 0) revert AuctionErrorLib.FirstBidAlreadyPlaced();
             _auctionLots[auctionId].startPrice = startPrice;
         }
 
         if (auction.startTime != startTime) {
-            if (uint32(block.timestamp) > auction.startTime) revert AuctionIsAlreadyStarted();
+            if (uint32(block.timestamp) > auction.startTime) revert AuctionErrorLib.AuctionIsAlreadyStarted();
             _auctionLots[auctionId].startTime = startTime;
         }
 
@@ -323,7 +297,7 @@ contract Auction is
         }
 
         if (auction.delta != delta) {
-            if (delta < minDelta) revert ToLowDelta();
+            if (delta < minDelta) revert AuctionErrorLib.ToLowDelta();
             _auctionLots[auctionId].delta = delta;
         }
 
@@ -342,8 +316,8 @@ contract Auction is
     /// @param auctionId id of auction, that should delete
     function delAuctionLot(uint256 auctionId) external {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        if (msg.sender != auction.auctionCreator) revert NotOwner(msg.sender);
-        if (auction.lastBidder != address(0)) revert AuctionIsAlreadyStarted();
+        if (msg.sender != auction.auctionCreator) revert AuctionErrorLib.NotOwner(msg.sender);
+        if (auction.lastBidder != address(0)) revert AuctionErrorLib.AuctionIsAlreadyStarted();
 
         delete _auctionLots[auctionId];
         emit DeleteAuctionLot(auctionId, msg.sender);
@@ -365,9 +339,9 @@ contract Auction is
     function claimLot(uint256 auctionId) external payable {
         AuctionLot memory auction = getAuctionInfo(auctionId);
         if (uint32(block.timestamp) < auction.endTime || auction.lastBid != auction.buyNowPrice) {
-            revert AuctionIsAlreadyFinished();
+            revert AuctionErrorLib.AuctionIsAlreadyFinished();
         }
-        if (auction.lastBidder != msg.sender) revert NotLastBidder();
+        if (auction.lastBidder != msg.sender) revert AuctionErrorLib.NotLastBidder();
 
         delete _auctionLots[auctionId];
 
@@ -382,7 +356,7 @@ contract Auction is
             if (IERC721(auction.tokenContract).supportsInterface(type(IERC2981).interfaceId)) {
                 if (auction.paymentToken == address(0)) {
                     (, royaltyAmount) = getRoyaltyInfo(auction.tokenContract, auction.tokenId, auction.lastBid);
-                    if (msg.value != royaltyAmount) revert RoyaltyValueMustBeEqualTo(royaltyAmount);
+                    if (msg.value != royaltyAmount) revert AuctionErrorLib.RoyaltyValueMustBeEqualTo(royaltyAmount);
                 }
                 _repayRoyalty(
                     auction.lastBidder, auction.paymentToken, auction.tokenContract, auction.tokenId, auction.lastBid
@@ -393,7 +367,7 @@ contract Auction is
             if (IERC1155(auction.tokenContract).supportsInterface(type(IERC2981).interfaceId)) {
                 if (auction.paymentToken == address(0)) {
                     (, royaltyAmount) = getRoyaltyInfo(auction.tokenContract, auction.tokenId, auction.lastBid);
-                    if (msg.value != royaltyAmount) revert RoyaltyValueMustBeEqualTo(royaltyAmount);
+                    if (msg.value != royaltyAmount) revert AuctionErrorLib.RoyaltyValueMustBeEqualTo(royaltyAmount);
                 }
                 _repayRoyalty(
                     auction.lastBidder, auction.paymentToken, auction.tokenContract, auction.tokenId, auction.lastBid
@@ -409,7 +383,7 @@ contract Auction is
 
     // Admin
     function setFee(uint256 newValue) external onlyOwner {
-        if (newValue > MAX_FEE) revert GraterThanMaxFee(MAX_FEE);
+        if (newValue > MAX_FEE) revert AuctionErrorLib.GraterThanMaxFee(MAX_FEE);
         fee = newValue; // add timelock?
 
         emit NewFee(newValue);
@@ -422,7 +396,7 @@ contract Auction is
 
         if (auction.paymentToken == address(0)) {
             (bool success,) = to.call{value: bal}("");
-            if (!success) revert FaliedToSendEther();
+            if (!success) revert AuctionErrorLib.FaliedToSendEther();
         } else {
             IERC20(auction.paymentToken).safeTransfer(to, bal);
         }
@@ -435,14 +409,14 @@ contract Auction is
 
         if (token == address(0)) {
             (bool success,) = destination.call{value: collectAmount}("");
-            if (!success) revert FaliedToSendEther();
+            if (!success) revert AuctionErrorLib.FaliedToSendEther();
         } else {
             IERC20(token).safeTransfer(destination, collectAmount);
         }
     }
 
     function addPaymentToken(address token) external onlyOwner {
-        if (token == address(0)) revert NativeAddress();
+        if (token == address(0)) revert AuctionErrorLib.NativeAddress();
         whitelistedPaymentTokens[token] = true;
     }
 
