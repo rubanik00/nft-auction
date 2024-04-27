@@ -17,12 +17,25 @@ contract TestPointsHook is Test {
     TestToken1155 token1155;
     TestToken20 token20;
     WithoutFallback withoutFallback;
+    address alice;
+    address bob;
     uint96 public constant TEN_PERCENT = 1000;
 
     function setUp() public {
-        // Deploy our tokens
+        // Deploy tokens
         token721 = new TestToken721(TEN_PERCENT);
         token721WithoutRoyalties = new TestERC721WithoutRoyalties();
         token1155 = new TestToken1155("https://test.com/", TEN_PERCENT);
+        token20 = new TestToken20(100 ether);
+        withoutFallback = new WithoutFallback(address(auction));
+        alice = makeAddr("alice");
+        bob = makeAddr("bob");
+    }
+
+    // Whitelist
+    function test_CannotAddToWhitelistIfNotOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        auction.addPaymentToken(address(token20));
     }
 }

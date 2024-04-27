@@ -14,10 +14,7 @@ contract TestToken1155 is ERC1155, ERC2981, Ownable {
     event RoyaltyChanged(address receiver, uint96 royaltyFeesInBips);
     event TokenRoyaltyChanged(uint256 tokenId, address receiver, uint96 royaltyFeesInBips);
 
-    constructor(string memory _uri, uint96 royaltyFeesInBips)
-        ERC1155(_uri)
-        Ownable(_msgSender())
-    {
+    constructor(string memory _uri, uint96 royaltyFeesInBips) ERC1155(_uri) Ownable(_msgSender()) {
         name = "Test1155WithRoyalties";
         symbol = "T1155WR";
         uri_ = _uri;

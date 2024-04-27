@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.25;
 
-import "../IAuction.sol";
+import "../utils/IAuction.sol";
 
 contract WithoutFallback {
     IAuction auctionAddress;

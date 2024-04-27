@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
-import "./IAuction.sol";
+// import "./utils/IAuction.sol";
 import "./utils/Payout2981Support.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
@@ -14,7 +14,6 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 /// @title Auction Contract
 
 contract Auction is
-    IAuction,
     Initializable,
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
@@ -27,6 +26,21 @@ contract Auction is
 
     uint256 public constant MAX_FEE = 1500; // 15%
 
+    struct AuctionLot {
+        uint32 startTime;
+        uint32 endTime;
+        address tokenContract;
+        address auctionCreator;
+        address paymentToken;
+        address lastBidder;
+        uint256 tokenId;
+        uint256 amount;
+        uint256 buyNowPrice;
+        uint256 startPrice;
+        uint256 delta;
+        uint256 lastBid;
+    }
+
     mapping(address => mapping(uint256 => uint256)) public pendingPayments; // list of users with failed transfers | pendingPayments[userAddress][auctionId] = amount
     mapping(uint256 => AuctionLot) internal _auctionLots;
     mapping(address => uint256) public collectedFees;
@@ -37,9 +51,66 @@ contract Auction is
     uint256 public fee; // Fee percent with denominator 10000
     uint256 public minDelta; // min diff between old and new bids
 
+    event AddAuctionLot(
+        uint256 indexed auctionId,
+        address indexed auctionCreator,
+        address indexed tokenContract,
+        uint256 tokenId,
+        uint256 quantity,
+        address paymentToken,
+        uint256 buyNowPrice,
+        uint256 startPrice,
+        uint32 startTime,
+        uint32 endTime,
+        uint256 delta
+    );
+    event EditAuctionLot(
+        uint256 indexed auctionId,
+        uint256 buyNowPrice,
+        uint256 startPrice,
+        uint32 startTime,
+        uint32 endTime,
+        uint256 delta
+    );
+    event ExtendAuction(uint256 indexed auctionId, uint256 endTime);
+    event DeleteAuctionLot(uint256 indexed auctionId, address indexed auctionCreator);
+    event ClaimAuctionLot(uint256 indexed auctionId, address indexed auctionCreator);
+    event AddBid(uint256 indexed auctionId, address indexed bidder, uint256 bid);
+    event AddedPendingPayment(uint256 indexed auctionId, address indexed bidder, uint256 bid);
+    event PayoutPendingPayments(uint256 auctionId, address from, address to);
+    event NewFee(uint256 newFee);
+
+    error NotOwner(address caller);
+    error NotWhitelistedPaymentToken();
+    error ToLowDelta();
+    error AmountEquelZero();
+    error StartTimeEqualZero();
+    error WrongAuctionEndingDate();
+    error NotApprovedToken();
+    error NotSupportedToken();
+    error AuctionDoesNotExist();
+    error OwnerCannotAddBid();
+    error CannotAddBidAgain();
+    error AuctionIsAlreadyFinished();
+    error AmountMoreThanFixedPrice();
+    error WrongMsgValue();
+    error ShouldBeBiggerThanPrevious();
+    error ShouldBeBiggerThanStartPrice();
+    error AlreadyExtended();
+    error CouldExtendOnlyFor30Days();
+    error FirstBidAlreadyPlaced();
+    error AuctionIsAlreadyStarted();
+    error NotLastBidder();
+    error RoyaltyValueMustBeEqualTo(uint256 royaltyAmount);
+    error GraterThanMaxFee(uint256 maxFee);
+    error FaliedToSendEther();
+    error NativeAddress();
+
     /// @dev Check if caller is contract owner
     modifier onlyOwner() {
-        require(hasRole(OWNER_AUCTION_ROLE, msg.sender), "Caller is not an owner");
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            revert NotOwner(msg.sender);
+        }
         _;
     }
 
@@ -99,37 +170,37 @@ contract Auction is
         address paymentToken,
         uint256 buyNowPrice,
         uint256 startPrice,
-        uint256 startTime,
-        uint256 endTime,
+        uint32 startTime,
+        uint32 endTime,
         uint256 delta
     ) external returns (uint256 id) {
-        require(whitelistedPaymentTokens[paymentToken] || paymentToken == address(0), "Not whitelisted payment token");
-        require(delta >= minDelta, "To low delta value");
-        require(amount != 0, "Amount should be positive");
-        require(startTime != 0, "Start time must be > zero");
-        require(endTime > startTime, "Wrong auction ending date");
+        if (!whitelistedPaymentTokens[paymentToken] || paymentToken != address(0)) revert NotWhitelistedPaymentToken();
+        if (delta < minDelta) revert ToLowDelta();
+        if (amount == 0) revert AmountEquelZero();
+        if (startTime == 0) revert StartTimeEqualZero();
+        if (endTime <= startTime) revert WrongAuctionEndingDate();
 
         if (IERC165(tokenContract).supportsInterface(type(IERC721).interfaceId)) {
-            require(IERC721(tokenContract).isApprovedForAll(msg.sender, address(this)), "Not approved token");
+            if (!IERC721(tokenContract).isApprovedForAll(msg.sender, address(this))) revert NotApprovedToken();
         } else {
-            require(IERC165(tokenContract).supportsInterface(type(IERC1155).interfaceId), "Not supported token");
-            require(IERC1155(tokenContract).isApprovedForAll(msg.sender, address(this)), "Token is not approved");
+            if (!IERC165(tokenContract).supportsInterface(type(IERC1155).interfaceId)) revert NotSupportedToken();
+            if (!IERC1155(tokenContract).isApprovedForAll(msg.sender, address(this))) revert NotApprovedToken();
         }
 
         id = lastId;
 
         _auctionLots[id] = AuctionLot(
+            uint32(block.timestamp) + startTime,
+            uint32(block.timestamp) + endTime,
             tokenContract,
-            tokenId,
             msg.sender,
-            amount,
             paymentToken,
+            address(0),
+            tokenId,
+            amount,
             buyNowPrice,
             startPrice,
-            block.timestamp + startTime,
-            block.timestamp + endTime,
             delta,
-            address(0),
             0
         );
         unchecked {
@@ -145,8 +216,8 @@ contract Auction is
             paymentToken,
             buyNowPrice,
             startPrice,
-            block.timestamp + startTime,
-            block.timestamp + endTime,
+            uint32(uint32(block.timestamp)) + startTime,
+            uint32(block.timestamp) + endTime,
             delta
         );
 
@@ -161,16 +232,16 @@ contract Auction is
     function addBid(uint256 auctionId, uint256 amount) external payable nonReentrant {
         AuctionLot memory auction = getAuctionInfo(auctionId);
 
-        require(auction.auctionCreator != address(0), "Auction does not exist");
-        require(auction.auctionCreator != msg.sender, "Owner cannot add bid");
-        require(auction.lastBidder != msg.sender, "Last bidder cannot add bid again");
-        require(
-            block.timestamp < auction.endTime || auction.lastBid != auction.buyNowPrice, "Auction is already finished"
-        );
-        require(amount <= auction.buyNowPrice, "Cannot be more than fixed price");
+        if (auction.auctionCreator == address(0)) revert AuctionDoesNotExist();
+        if (auction.auctionCreator == msg.sender) revert OwnerCannotAddBid();
+        if (auction.lastBidder == msg.sender) revert CannotAddBidAgain();
+        if (uint32(block.timestamp) > auction.endTime || auction.lastBid == auction.buyNowPrice) {
+            revert AuctionIsAlreadyFinished();
+        }
+        if (amount > auction.buyNowPrice) revert AmountMoreThanFixedPrice();
 
         if (auction.paymentToken == address(0)) {
-            require(msg.value == amount, "Wrong msg.value");
+            if (msg.value != amount) revert WrongMsgValue();
         } else {
             uint256 balanceBefore = IERC20(auction.paymentToken).balanceOf(address(this));
             IERC20(auction.paymentToken).safeTransferFrom(msg.sender, address(this), amount);
@@ -179,11 +250,11 @@ contract Auction is
         }
 
         if (auction.lastBidder != address(0)) {
-            require(amount >= auction.lastBid + auction.delta, "Should be bigger than previous");
+            if (amount <= auction.lastBid + auction.delta) revert ShouldBeBiggerThanPrevious();
 
             _payout(auctionId, auction.paymentToken, auction.lastBidder, auction.lastBid);
         } else {
-            require(amount >= auction.startPrice, "Should be bigger than startPrice");
+            if (amount <= auction.startPrice) revert ShouldBeBiggerThanStartPrice();
         }
 
         _auctionLots[auctionId].lastBidder = msg.sender;
@@ -195,12 +266,14 @@ contract Auction is
     /// @dev Increase endTime in auction entity
     /// @param auctionId id of auction
     /// @param newEndTime new timestamp for ending, could be no longer than 30 days than previous endTime
-    function extendActionLifeTime(uint256 auctionId, uint256 newEndTime) public {
+    function extendActionLifeTime(uint256 auctionId, uint32 newEndTime) public {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        require(msg.sender == auction.auctionCreator, "Not creator of auction");
-        require(!_extendedLots[auctionId], "Already extended");
-        require(block.timestamp < auction.endTime && auction.lastBid != auction.buyNowPrice, "Auction finished");
-        require(newEndTime - _auctionLots[auctionId].endTime <= 30 days, "Could extend only for 30 days");
+        if (msg.sender != auction.auctionCreator) revert NotOwner(msg.sender);
+        if (_extendedLots[auctionId]) revert AlreadyExtended();
+        if (uint32(block.timestamp) > auction.endTime || auction.lastBid == auction.buyNowPrice) {
+            revert AuctionIsAlreadyFinished();
+        }
+        if (newEndTime - _auctionLots[auctionId].endTime > 30 days) revert CouldExtendOnlyFor30Days();
 
         _auctionLots[auctionId].endTime = newEndTime;
         _extendedLots[auctionId] = true;
@@ -221,21 +294,23 @@ contract Auction is
         uint256 auctionId,
         uint256 buyNowPrice,
         uint256 startPrice,
-        uint256 startTime,
-        uint256 endTime,
+        uint32 startTime,
+        uint32 endTime,
         uint256 delta
     ) external {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        require(msg.sender == auction.auctionCreator, "Not creator of auction");
-        require(block.timestamp < auction.endTime && auction.lastBid != auction.buyNowPrice, "Auction finished");
+        if (msg.sender != auction.auctionCreator) revert NotOwner(msg.sender);
+        if (uint32(block.timestamp) > auction.endTime || auction.lastBid != auction.buyNowPrice) {
+            revert AuctionIsAlreadyFinished();
+        }
 
         if (auction.startPrice != startPrice) {
-            require(auction.lastBid == 0, "First bid already placed");
+            if (auction.lastBid != 0) revert FirstBidAlreadyPlaced();
             _auctionLots[auctionId].startPrice = startPrice;
         }
 
         if (auction.startTime != startTime) {
-            require(block.timestamp < auction.startTime, "Auction started");
+            if (uint32(block.timestamp) > auction.startTime) revert AuctionIsAlreadyStarted();
             _auctionLots[auctionId].startTime = startTime;
         }
 
@@ -248,7 +323,7 @@ contract Auction is
         }
 
         if (auction.delta != delta) {
-            require(delta >= minDelta, "To low delta value");
+            if (delta < minDelta) revert ToLowDelta();
             _auctionLots[auctionId].delta = delta;
         }
 
@@ -267,8 +342,8 @@ contract Auction is
     /// @param auctionId id of auction, that should delete
     function delAuctionLot(uint256 auctionId) external {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        require(msg.sender == auction.auctionCreator, "Not creator of auction");
-        require(auction.lastBidder == address(0), "Auction started");
+        if (msg.sender != auction.auctionCreator) revert NotOwner(msg.sender);
+        if (auction.lastBidder != address(0)) revert AuctionIsAlreadyStarted();
 
         delete _auctionLots[auctionId];
         emit DeleteAuctionLot(auctionId, msg.sender);
@@ -289,8 +364,10 @@ contract Auction is
 
     function claimLot(uint256 auctionId) external payable {
         AuctionLot memory auction = getAuctionInfo(auctionId);
-        require(block.timestamp >= auction.endTime || auction.lastBid == auction.buyNowPrice, "Auction not finished");
-        require(auction.lastBidder == msg.sender, "You are not last bidder.");
+        if (uint32(block.timestamp) < auction.endTime || auction.lastBid != auction.buyNowPrice) {
+            revert AuctionIsAlreadyFinished();
+        }
+        if (auction.lastBidder != msg.sender) revert NotLastBidder();
 
         delete _auctionLots[auctionId];
 
@@ -305,14 +382,7 @@ contract Auction is
             if (IERC721(auction.tokenContract).supportsInterface(type(IERC2981).interfaceId)) {
                 if (auction.paymentToken == address(0)) {
                     (, royaltyAmount) = getRoyaltyInfo(auction.tokenContract, auction.tokenId, auction.lastBid);
-                    require(
-                        msg.value == royaltyAmount,
-                        string(
-                            abi.encodePacked(
-                                "Value must be equal to ", Strings.toString(royaltyAmount), " (royalty fee)"
-                            )
-                        )
-                    );
+                    if (msg.value != royaltyAmount) revert RoyaltyValueMustBeEqualTo(royaltyAmount);
                 }
                 _repayRoyalty(
                     auction.lastBidder, auction.paymentToken, auction.tokenContract, auction.tokenId, auction.lastBid
@@ -323,14 +393,7 @@ contract Auction is
             if (IERC1155(auction.tokenContract).supportsInterface(type(IERC2981).interfaceId)) {
                 if (auction.paymentToken == address(0)) {
                     (, royaltyAmount) = getRoyaltyInfo(auction.tokenContract, auction.tokenId, auction.lastBid);
-                    require(
-                        msg.value == royaltyAmount,
-                        string(
-                            abi.encodePacked(
-                                "Value must be equal to ", Strings.toString(royaltyAmount), " (royalty fee)"
-                            )
-                        )
-                    );
+                    if (msg.value != royaltyAmount) revert RoyaltyValueMustBeEqualTo(royaltyAmount);
                 }
                 _repayRoyalty(
                     auction.lastBidder, auction.paymentToken, auction.tokenContract, auction.tokenId, auction.lastBid
@@ -346,7 +409,7 @@ contract Auction is
 
     // Admin
     function setFee(uint256 newValue) external onlyOwner {
-        require(newValue <= MAX_FEE, "Fee can't be grater that MAX_FEE");
+        if (newValue > MAX_FEE) revert GraterThanMaxFee(MAX_FEE);
         fee = newValue; // add timelock?
 
         emit NewFee(newValue);
@@ -359,7 +422,7 @@ contract Auction is
 
         if (auction.paymentToken == address(0)) {
             (bool success,) = to.call{value: bal}("");
-            require(success, "Failed to send Ether");
+            if (!success) revert FaliedToSendEther();
         } else {
             IERC20(auction.paymentToken).safeTransfer(to, bal);
         }
@@ -372,14 +435,14 @@ contract Auction is
 
         if (token == address(0)) {
             (bool success,) = destination.call{value: collectAmount}("");
-            require(success, "Failed to send Ether");
+            if (!success) revert FaliedToSendEther();
         } else {
             IERC20(token).safeTransfer(destination, collectAmount);
         }
     }
 
     function addPaymentToken(address token) external onlyOwner {
-        require(token != address(0), "Zero address for ether");
+        if (token == address(0)) revert NativeAddress();
         whitelistedPaymentTokens[token] = true;
     }
 

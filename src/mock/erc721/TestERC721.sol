@@ -83,7 +83,6 @@ contract TestToken721 is ERC721Enumerable, ERC2981, ERC721URIStorage {
         emit Burn(tokenId);
     }
 
-
     /// @dev Sets the royalty information that all ids in this contract will default to.
     /// @param _receiver royalty reciever. Cannot be the zero address.
     /// @param _royaltyFeesInBips fee percent. 1% = 100 bips
